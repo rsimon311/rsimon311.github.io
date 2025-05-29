@@ -8,48 +8,88 @@
     <form id="sseForm">
         <label for="toolName">Tool Name:</label>
         <input type="text" id="toolName" name="toolName" value="azmcp-bestpractices-get" required>
-        <!-- You can add more <input> fields here for additional params -->
         <button type="submit">Connect</button>
     </form>
     <pre id="output"></pre>
+
+    <!-- (Optional) Add an input form for sending messages after connection -->
+    <form id="inputForm" style="display:none; margin-top:1em;">
+        <label for="userInput">Send to SSE session:</label>
+        <input type="text" id="userInput" placeholder="Type your input..." required>
+        <button type="submit">Send</button>
+    </form>
+
     <script>
         const output = document.getElementById('output');
         let evtSource = null;
+        let messageEndpoint = null;
 
         document.getElementById('sseForm').addEventListener('submit', function(e) {
             e.preventDefault();
 
-            // If a connection already exists, close it
+            // Close existing connection if present
             if (evtSource) {
                 evtSource.close();
             }
+            messageEndpoint = null;
+            document.getElementById("inputForm").style.display = "none";
 
-            // Get parameter(s)
+            // Build SSE URL
             const toolName = encodeURIComponent(document.getElementById('toolName').value);
-            // You can concatenate more query params here as needed
-
-            // Build URL
             const sseUrl = `http://localhost:5008/sse?tool=${toolName}`;
 
             // Clear output
             output.textContent = `Connecting to ${sseUrl}\n`;
 
-            // Create the EventSource
+            // Start SSE
             evtSource = new EventSource(sseUrl);
 
             evtSource.onopen = function() {
                 output.textContent += "SSE connection opened.\n";
             };
 
+            // Listen for default messages
             evtSource.onmessage = function(event) {
-                output.textContent += event.data + "\n";
+                output.textContent += "[message] " + event.data + "\n";
             };
+
+            // Listen for 'endpoint' events
+            evtSource.addEventListener('endpoint', function(event) {
+                // This is where you "find" the message endpoint in the SSE stream!
+                output.textContent += "[endpoint] " + event.data + "\n";
+                messageEndpoint = "http://localhost:5008" + event.data; // event.data is like "/message?sessionId=..."
+                document.getElementById('inputForm').style.display = "block";
+            });
+
+            // Optionally: listen for any other event types (see your backend's API)
+            // evtSource.addEventListener('myotherevent', function(event) { ... });
 
             evtSource.onerror = function(event) {
                 output.textContent += "SSE error or connection closed\n";
-                // Optionally close the connection on error
-                // evtSource.close();
             };
+        });
+
+        // Allow user to send input to the message endpoint if available
+        document.getElementById('inputForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (!messageEndpoint) {
+                output.textContent += "No message endpoint set.\n";
+                return;
+            }
+            const userInput = document.getElementById('userInput').value;
+            fetch(messageEndpoint, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ input: userInput })
+            })
+            .then(res => res.text())
+            .then(data => {
+                output.textContent += `[sent input] ${userInput}\n`;
+            })
+            .catch(err => {
+                output.textContent += `[send error] ${err}\n`;
+            });
+            document.getElementById('userInput').value = '';
         });
     </script>
 </body>
