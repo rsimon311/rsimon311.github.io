@@ -5,26 +5,52 @@
 </head>
 <body>
     <h2>SSE Output</h2>
+    <form id="sseForm">
+        <label for="toolName">Tool Name:</label>
+        <input type="text" id="toolName" name="toolName" value="azmcp-bestpractices-get" required>
+        <!-- You can add more <input> fields here for additional params -->
+        <button type="submit">Connect</button>
+    </form>
     <pre id="output"></pre>
     <script>
         const output = document.getElementById('output');
+        let evtSource = null;
 
-        // Use your full (escaped) URL here:
-        const sseUrl = "http://localhost:5008/sse?tools/azmcp-bestpractices-get";
+        document.getElementById('sseForm').addEventListener('submit', function(e) {
+            e.preventDefault();
 
-        const evtSource = new EventSource(sseUrl);
+            // If a connection already exists, close it
+            if (evtSource) {
+                evtSource.close();
+            }
 
-        evtSource.onopen = function() {
-            output.textContent += "SSE connection opened.\n";
-        };
+            // Get parameter(s)
+            const toolName = encodeURIComponent(document.getElementById('toolName').value);
+            // You can concatenate more query params here as needed
 
-        evtSource.onmessage = function(event) {
-            output.textContent += event.data + "\n";
-        };
+            // Build URL
+            const sseUrl = `http://localhost:5008/sse?tool=${toolName}`;
 
-        evtSource.onerror = function(event) {
-            output.textContent += "SSE error or connection closed\n";
-        };
+            // Clear output
+            output.textContent = `Connecting to ${sseUrl}\n`;
+
+            // Create the EventSource
+            evtSource = new EventSource(sseUrl);
+
+            evtSource.onopen = function() {
+                output.textContent += "SSE connection opened.\n";
+            };
+
+            evtSource.onmessage = function(event) {
+                output.textContent += event.data + "\n";
+            };
+
+            evtSource.onerror = function(event) {
+                output.textContent += "SSE error or connection closed\n";
+                // Optionally close the connection on error
+                // evtSource.close();
+            };
+        });
     </script>
 </body>
 </html>
