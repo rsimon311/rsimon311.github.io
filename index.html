@@ -1,96 +1,176 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>SSE with Custom Params Demo</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Project</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        nav {
+            background-color: #333;
+            color: white;
+            padding: 10px;
+            display: flex;
+            justify-content: space-around;
+        }
+        nav a {
+            color: white;
+            text-decoration: none;
+            padding: 5px 10px;
+        }
+        nav a:hover {
+            background-color: #555;
+        }
+        section {
+            padding: 20px;
+        }
+    </style>
 </head>
 <body>
-    <h2>SSE Output</h2>
-    <form id="sseForm">
-        <label for="toolName">Tool Name:</label>
-        <input type="text" id="toolName" name="toolName" value="azmcp-bestpractices-get" required>
-        <button type="submit">Connect</button>
-    </form>
-    <pre id="output"></pre>
-
-    <!-- (Optional) Add an input form for sending messages after connection -->
-    <form id="inputForm" style="display:none; margin-top:1em;">
-        <label for="userInput">Send to SSE session:</label>
-        <input type="text" id="userInput" placeholder="Type your input..." required>
-        <button type="submit">Send</button>
-    </form>
+    <nav>
+        <a href="#home" onclick="navigateTo('home')">Home</a>
+        <a href="#about" onclick="navigateTo('about')">About</a>
+        <a href="#sse" onclick="navigateTo('sse')">SSE Demo</a>
+    </nav>
+    <section id="app">
+        <!-- Content will be dynamically injected here -->
+    </section>
 
     <script>
-        const output = document.getElementById('output');
-        let evtSource = null;
-        let messageEndpoint = null;
+        const MCP_SERVER_URL = 'http://7f000001.c0a80001.rbndr.us:5008/sse';
 
-        document.getElementById('sseForm').addEventListener('submit', function(e) {
-            e.preventDefault();
+        async function sendMcpMessage(message) {
+            try {
+                const response = await fetch(MCP_SERVER_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json, text/event-stream'
+                    },
+                    body: JSON.stringify(message)
+                });
 
-            // Close existing connection if present
-            if (evtSource) {
-                evtSource.close();
+                if (response.status === 200) {
+                    console.log("Server accepted notification/response batch.");
+                    return null;
+                } else if (response.ok) {
+                    const contentType = response.headers.get('Content-Type');
+                    if (contentType && contentType.includes('application/json')) {
+                        const responseData = await response.json();
+                        console.log("Received immediate JSON response:", responseData);
+                        return responseData;
+                    } else if (contentType && contentType.includes('text/event-stream')) {
+                        console.log("Server initiated an SSE stream in response to POST.");
+                        return null;
+                    } else {
+                        console.warn(`Received unexpected Content-Type: ${contentType}`);
+                        return null;
+                    }
+                } else {
+                    console.error(`HTTP error sending message: ${response.status} ${response.statusText}`);
+                    try {
+                        const errorBody = await response.json();
+                        console.error("Error details:", errorBody);
+                    } catch (e) {
+                        console.error("Could not parse error body as JSON.");
+                    }
+                    throw new Error(`Failed to send message: ${response.status}`);
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                throw error;
             }
-            messageEndpoint = null;
-            document.getElementById("inputForm").style.display = "none";
+        }
 
-            // Build SSE URL
-            const toolName = encodeURIComponent(document.getElementById('toolName').value);
-            const sseUrl = `http://localhost:5008/sse?tool=${toolName}`;
+        function startMcpListener() {
+            const eventSource = new EventSource(MCP_SERVER_URL);
 
-            // Clear output
-            output.textContent = `Connecting to ${sseUrl}\n`;
-
-            // Start SSE
-            evtSource = new EventSource(sseUrl);
-
-            evtSource.onopen = function() {
-                output.textContent += "SSE connection opened.\n";
+            eventSource.onopen = () => {
+                console.log('SSE connection opened.');
             };
 
-            // Listen for default messages
-            evtSource.onmessage = function(event) {
-                output.textContent += "[message] " + event.data + "\n";
+            eventSource.onmessage = (event) => {
+                console.log('SSE message received:', event);
+                try {
+                    const mcpMessage = JSON.parse(event.data);
+                    console.log('Parsed MCP message:', mcpMessage);
+                    handleReceivedMcpMessage(mcpMessage);
+                } catch (e) {
+                    console.error('Error parsing SSE message data:', e);
+                }
             };
 
-            // Listen for 'endpoint' events
-            evtSource.addEventListener('endpoint', function(event) {
-                // This is where you "find" the message endpoint in the SSE stream!
-                output.textContent += "[endpoint] " + event.data + "\n";
-                messageEndpoint = "http://localhost:5008" + event.data; // event.data is like "/message?sessionId=..."
-                document.getElementById('inputForm').style.display = "block";
-            });
-
-            // Optionally: listen for any other event types (see your backend's API)
-            // evtSource.addEventListener('myotherevent', function(event) { ... });
-
-            evtSource.onerror = function(event) {
-                output.textContent += "SSE error or connection closed\n";
+            eventSource.onerror = (error) => {
+                console.error('SSE error:', error);
+                eventSource.close();
+                console.log('SSE connection closed due to error.');
             };
-        });
 
-        // Allow user to send input to the message endpoint if available
-        document.getElementById('inputForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            if (!messageEndpoint) {
-                output.textContent += "No message endpoint set.\n";
+            eventSource.onclose = () => {
+                console.log('SSE connection closed.');
+            };
+
+            console.log('Attempting to connect to SSE listener...');
+            return eventSource;
+        }
+
+        function handleReceivedMcpMessage(message) {
+            if (Array.isArray(message)) {
+                console.log("Handling batch of messages:", message);
+                message.forEach(msg => processSingleMcpMessage(msg));
+            } else {
+                processSingleMcpMessage(message);
+            }
+        }
+
+        function processSingleMcpMessage(message) {
+            console.log("Processing single message:", message);
+            if (message.jsonrpc !== "2.0") {
+                console.error("Received non-JSON-RPC 2.0 message:", message);
                 return;
             }
-            const userInput = document.getElementById('userInput').value;
-            fetch(messageEndpoint, {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ input: userInput })
-            })
-            .then(res => res.text())
-            .then(data => {
-                output.textContent += `[sent input] ${userInput}\n`;
-            })
-            .catch(err => {
-                output.textContent += `[send error] ${err}\n`;
-            });
-            document.getElementById('userInput').value = '';
-        });
+
+            if (message.method && message.id !== undefined) {
+                console.log("Received a Request from server:", message);
+            } else if (message.method && message.id === undefined) {
+                console.log("Received a Notification from server:", message);
+            } else if (message.id !== undefined && (message.result !== undefined || message.error !== undefined)) {
+                console.log("Received a Response from server:", message);
+            } else {
+                console.warn("Received unrecognized JSON-RPC message type:", message);
+            }
+        }
+
+        const mcpEventListener = startMcpListener();
+
+        async function exampleInteraction() {
+            const listStorageAccountsRequest = {
+                jsonrpc: "2.0",
+                id: "req-1",
+                method: "tools/call",
+                params: {
+                    name: "azmcp-bestpractices-get"
+                }
+            };
+
+            console.log("Sending request to list storage accounts...");
+            try {
+                const response = await sendMcpMessage(listStorageAccountsRequest);
+                if (response) {
+                    console.log("Storage accounts request completed via immediate response:", response);
+                } else {
+                    console.log("Storage accounts request sent. Awaiting response/notifications on SSE stream...");
+                }
+            } catch (error) {
+                console.error("Failed to send storage accounts request:", error);
+            }
+        }
+
+        setTimeout(exampleInteraction, 2000);
     </script>
 </body>
 </html>
