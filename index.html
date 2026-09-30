@@ -19,9 +19,9 @@ const log = document.getElementById("log");
 document.getElementById("origin").textContent = window.location.origin;
 function append(s) { log.textContent += s + "\n"; }
 
-const DIR = encodeURIComponent(JSON.stringify({ directory: "/home/lima.guest/work/opencode" }));
+const DIR = encodeURIComponent(JSON.stringify({ directory: "/tmp/" }));
 // Direct query-string form (matches the working curl PoC):
-const QUERY = "location%5Bdirectory%5D=%2Fhome%2Flima.guest%2Fwork%2Fopencode";
+const QUERY = "location%5Bdirectory%5D=%2Ftmp%2F";
 
 async function fireNoCorsPost(label, mkBody) {
   append("[" + label + "] POST no-cors (no Content-Type) to pty.create ...");
